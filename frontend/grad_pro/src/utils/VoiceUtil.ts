@@ -27,8 +27,15 @@ class VoiceUtil {
     this.errorCallback = callback;
   }
 
-  startListening() {
-    Voice.start('ko-KR');
+  async startListening() {
+    try {
+      await Voice.start('ko-KR');
+    } catch (error) {
+      console.error('Voice start failed: ', error);
+      if (this.errorCallback) {
+        this.errorCallback(error);
+      }
+    }
   }
 
   stopListening() {

@@ -1,6 +1,6 @@
 // src/screens/LyricCreation.tsx
 import React, { useState, useEffect } from 'react';
-import { Text, View, Alert, Image, TouchableOpacity, ImageBackground,StyleSheet  } from 'react-native';
+import { Text, View, Alert, Image, TouchableOpacity, ImageBackground, StyleSheet, PermissionsAndroid, Platform } from 'react-native';
 import VoiceUtil from '../utils/VoiceUtil';
 import styles from '../styles/lyricCStyle'
 
@@ -11,12 +11,42 @@ const LyricCreation = ({ route, navigation }) => {
   const [onRecording, setOnRecording] = useState(false);
   const [answerCount, setAnswerCount] = useState(0);
   const [answer, setAnswer] = useState('');
+  const [hasAudioPermission, setHasAudioPermission] = useState(Platform.OS !== 'android');
   const fields = ["mainCharacter", "likeColor", "likeThing"];
 
   const speechTextList = ["지금부터 간단한 질문 몇가지를 할게요.\n내가 가장 좋아하는 동물을\n말해볼까요?", "좋아요!\n다음은 내가 가장 좋아하는 색깔을\n말해볼까요?", "잘했어요!\n다음은 내가 가장 좋아하는 것을\n말해볼까요?"]
   const confirmTextList = ["내가 좋아하는 동물은", "내가 좋아하는 색은", "내가 좋아하는 것은"]
 
   useEffect(() => {
+    const requestAudioPermission = async () => {
+      if (Platform.OS === 'android') {
+        try {
+          const granted = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+            {
+              title: '마이크 접근 권한',
+              message: '음성 인식을 위해 마이크 권한이 필요합니다.',
+              buttonPositive: '확인',
+            },
+          );
+
+          if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+            Alert.alert('알림', '마이크 권한이 허용되지 않아 음성인식을 시작할 수 없습니다.');
+            setHasAudioPermission(false);
+            return;
+          }
+
+          setHasAudioPermission(true);
+        } catch (error) {
+          console.error('Permission request failed:', error);
+          Alert.alert('알림', '마이크 권한을 요청하는 중 오류가 발생했습니다.');
+          setHasAudioPermission(false);
+        }
+      }
+    };
+
+    requestAudioPermission();
+
     VoiceUtil.setSpeechResultCallback((results: string[]) => {
       setAnswer(results[0]);
       setIsDoneRecording(false);
@@ -68,6 +98,11 @@ const LyricCreation = ({ route, navigation }) => {
   }
 
   const startSpeech = () => {
+    if (!hasAudioPermission) {
+      Alert.alert('알림', '마이크 권한이 없어 음성 인식을 시작할 수 없습니다. 설정에서 권한을 허용해주세요.');
+      return;
+    }
+
     if(!onRecording){
       VoiceUtil.startListening();
       setOnRecording(true);
