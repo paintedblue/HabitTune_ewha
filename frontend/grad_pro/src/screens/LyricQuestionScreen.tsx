@@ -1,0 +1,738 @@
+import React, { useState, useEffect, useContext, useRef } from "react";
+import { Text, View, TextInput, TouchableOpacity, Alert, Image, StyleSheet } from "react-native";
+import BaseStyles from "../styles/BaseStyles";
+import Header from "../components/TabBarButtons";
+import VoiceUtil from "../utils/VoiceUtil";
+import { SelectedCategoriesContext } from "../contexts/SelectedCategoriesContext";
+import { BallIndicator } from "react-native-indicators";
+import api from "../utils/api";
+
+const MIN_RECOGNITION_WAIT_MS = 2000;
+
+const LyricQuestionScreen = ({ route, navigation }) => {
+  const { selectedCategories, updateCategory, userId: ctxUserId } = useContext(SelectedCategoriesContext);
+  const { userId: routeUserId, category } = route.params;
+  const userId = routeUserId || ctxUserId;
+
+  // 입력 단계 / 결과 단계
+  const [isRecordingStep, setIsRecordingStep] = useState(true); // true: 입력 화면, false: 결과 화면
+  // 실제 마이크 녹음 상태
+  const [onRecording, setOnRecording] = useState(false);
+
+  const [answer, setAnswer] = useState(""); // 서버에서 받은 최종 키워드
+  const [typedAnswer, setTypedAnswer] = useState(""); // 사용자가 말하거나 적은 값
+  const [imageUrl, setImageUrl] = useState("https://picsum.photos/400/400");
+  const [popup, setpopup] = useState(false);
+
+  const onRecordingRef = useRef(onRecording);
+  const requestInFlightRef = useRef(false);
+  const recognitionStartedAtRef = useRef<number | null>(null);
+
+  const commonSpeechText = `마이크 버튼을 누르고\n내가 좋아하는 ${getCategoryText(category)}를 말해 주세요`;
+  const exampleLines = getCategoryExamples(category);
+
+  useEffect(() => {
+    onRecordingRef.current = onRecording;
+  }, [onRecording]);
+
+  useEffect(() => {
+    const initVoice = async () => {
+      await VoiceUtil.cleanup();
+    };
+
+    initVoice();
+
+    VoiceUtil.setSpeechResultCallback(async (results) => {
+      console.log("Speech results:", results);
+      const recognized = (results?.[0] ?? "").trim();
+      console.log("Recognized text:", recognized);
+
+      const startedAt = recognitionStartedAtRef.current;
+      const elapsed = startedAt ? Date.now() - startedAt : null;
+
+      if (!recognized) {
+        if (elapsed !== null && elapsed < MIN_RECOGNITION_WAIT_MS) {
+          console.log("Empty recognition result within grace period, ignoring alert");
+          setOnRecording(false);
+          onRecordingRef.current = false;
+          recognitionStartedAtRef.current = null;
+          return;
+        }
+
+        Alert.alert("알림", "음성을 인식하지 못했습니다. 다시 시도해주세요.");
+        setOnRecording(false);
+        onRecordingRef.current = false;
+        recognitionStartedAtRef.current = null;
+        return;
+      }
+
+      setTypedAnswer(recognized);
+      setOnRecording(false);
+      onRecordingRef.current = false;
+      recognitionStartedAtRef.current = null;
+
+      console.log("Sending recognized text to server:", recognized);
+      await sendPreferenceToServer(recognized);
+    });
+
+    VoiceUtil.setErrorCallback((error) => {
+      console.log("Speech recognition error:", error);
+
+      if (!onRecordingRef.current) {
+        console.log("Ignoring speech error because mic is not active");
+        return;
+      }
+
+      const startedAt = recognitionStartedAtRef.current;
+      const elapsed = startedAt ? Date.now() - startedAt : null;
+
+      if (elapsed !== null && elapsed < MIN_RECOGNITION_WAIT_MS) {
+        console.log(
+          `Early speech error within grace period ${elapsed}ms < ${MIN_RECOGNITION_WAIT_MS}ms. Ignoring alert.`
+        );
+        setOnRecording(false);
+        onRecordingRef.current = false;
+        recognitionStartedAtRef.current = null;
+        return;
+      }
+
+      const errorCode = error?.error?.code || error?.code;
+      let errorMessage = "음성 인식에 실패했습니다.";
+      let shouldAlert = true;
+
+      switch (errorCode) {
+        case "7":
+        case "11":
+        case "13":
+        case "5":
+        case "8":
+          shouldAlert = false;
+          break;
+        case "6":
+          errorMessage = "음성이 들리지 않습니다. 마이크 권한을 확인해주세요.";
+          break;
+        case "9":
+          errorMessage = "권한이 거부되었습니다. 마이크 권한을 허용해주세요.";
+          break;
+        default:
+          errorMessage = "음성 인식 중 오류가 발생했습니다. 다시 시도해주세요.";
+      }
+
+      if (shouldAlert) {
+        Alert.alert("음성 인식 오류", errorMessage);
+      }
+      setOnRecording(false);
+      onRecordingRef.current = false;
+      recognitionStartedAtRef.current = null;
+    });
+
+    return () => {
+      VoiceUtil.destroyRecognizer();
+    };
+  }, []);
+
+  const sendPreferenceToServer = async (value: string) => {
+    if (requestInFlightRef.current) {
+      console.log("Request already in flight - skipping duplicate");
+      return;
+    }
+    requestInFlightRef.current = true;
+    console.log("Sending request to server:", { userId, category, value });
+    handlerOpenPopUP();
+
+    try {
+      const requestBody = {
+        field: category,
+        value: value.trim(),
+      };
+
+      console.log("Request body:", JSON.stringify(requestBody));
+
+      const response = await api.post("/preferences", requestBody);
+
+      const data = response.data;
+      console.log("Response data:", data);
+
+      if (!data.keyword || !data.image_url) {
+        throw new Error("서버 응답 데이터가 올바르지 않습니다.");
+      }
+
+      setAnswer(data.keyword);
+      setTypedAnswer(data.keyword);
+      setImageUrl(data.image_url);
+
+      // 결과 화면으로 전환
+      setIsRecordingStep(false);
+    } catch (error: any) {
+      console.error("Error during fetch operation:", error);
+
+      const userMessage =
+        error?.response?.data?.message ||
+        error?.message ||
+        "오류가 발생했습니다. 네트워크 연결을 확인해주세요.";
+
+      Alert.alert("오류", userMessage);
+    } finally {
+      setOnRecording(false);
+      onRecordingRef.current = false;
+      handlerClosePopUP();
+      requestInFlightRef.current = false;
+    }
+  };
+
+  const startSpeech = async () => {
+    console.log("=== startSpeech called ===");
+    console.log("Current onRecording state:", onRecordingRef.current);
+
+    if (onRecordingRef.current) {
+      console.log("⏹️ Stopping speech recognition...");
+      try {
+        await VoiceUtil.stopListening();
+      } catch (e) {
+        console.log("Failed to stop listening:", e);
+      }
+      setOnRecording(false);
+      onRecordingRef.current = false;
+      recognitionStartedAtRef.current = null;
+      return;
+    }
+
+    console.log("🎤 Starting speech recognition...");
+    try {
+      await VoiceUtil.cleanup();
+      await VoiceUtil.startListening();
+      setOnRecording(true);
+      onRecordingRef.current = true;
+      recognitionStartedAtRef.current = Date.now();
+      console.log("✅ Voice listening started");
+    } catch (error) {
+      console.error("❌ Failed to start listening:", error);
+      Alert.alert("오류", "음성 인식을 시작할 수 없습니다.");
+      setOnRecording(false);
+      onRecordingRef.current = false;
+      recognitionStartedAtRef.current = null;
+    }
+  };
+
+  const handlerInputSubmit = async () => {
+    const trimmed = typedAnswer.trim();
+    if (!trimmed) {
+      Alert.alert("입력 오류", "내용을 입력해 주세요.");
+      return;
+    }
+    await sendPreferenceToServer(trimmed);
+  };
+
+  const handlerBack = () => {
+    if (isRecordingStep) {
+      navigation.goBack();
+      return;
+    }
+    // 결과 → 다시 입력 모드
+    setIsRecordingStep(true);
+    setAnswer("");
+    setTypedAnswer("");
+    setImageUrl("https://picsum.photos/400/400");
+  };
+
+  const handlerNext = () => {
+    updateCategory(category);
+    navigation.navigate("LyricSelectScreen", { userId });
+  };
+
+  const handlerOpenPopUP = () => setpopup(true);
+  const handlerClosePopUP = () => setpopup(false);
+
+  return (
+    <View style={[BaseStyles.flexContainer, { backgroundColor: "#A5BEDF" }]}>
+      <Header />
+
+      <View style={[BaseStyles.contentContainer]}>
+        {/* 상단 질문 영역 */}
+        <View style={[BaseStyles.topContainer, { justifyContent: "center", alignItems: "center" }]}>
+          <View style={styles.questionCard}>
+            <Text style={styles.questionText}>
+              가사를 만들기 위해 내가 좋아하는 {getCategoryText(category)}는 무엇인가요?
+            </Text>
+          </View>
+
+          <View style={styles.selectedHabitsContainer}>
+            <Text style={styles.selectedHabitsLabel}>선택한 카테고리</Text>
+            <View style={styles.habitsTagWrapper}>
+              <View style={styles.habitChip}>
+                <Text style={styles.habitChipText}>{getCategoryLabel(category)}</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* 중간 입력/결과 영역 */}
+        <View style={[BaseStyles.middleContainer]}>
+          {isRecordingStep ? (
+            <View style={styles.inputContainer}>
+              {/* 음성 입력 */}
+              <View style={styles.voiceSection}>
+                <TouchableOpacity
+                  onPress={startSpeech}
+                  style={[styles.micButton, onRecording && styles.micButtonRecording]}
+                  activeOpacity={0.8}
+                >
+                  <View style={[styles.micIconOuter, onRecording && styles.micIconOuterRecording]}>
+                    <View style={[styles.micIconInner, onRecording && styles.micIconInnerRecording]}>
+                      <Text style={styles.micIcon}>🎤</Text>
+                    </View>
+                  </View>
+                  {onRecording && <View style={styles.recordingPulse} />}
+                </TouchableOpacity>
+
+                <Text style={styles.instructionText}>{commonSpeechText}</Text>
+              </View>
+
+              {/* 구분선 */}
+              <View style={styles.dividerContainer}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerText}>또는</Text>
+                <View style={styles.dividerLine} />
+              </View>
+
+              {/* 텍스트 입력 + 예시 */}
+              <View style={styles.textInputSection}>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="직접 입력하기"
+                  placeholderTextColor="#999"
+                  value={typedAnswer}
+                  onChangeText={setTypedAnswer}
+                  keyboardType="default"
+                  returnKeyType="done"
+                  multiline
+                  textAlign="center"
+                />
+
+                <View style={styles.exampleContainer}>
+                  <Text style={styles.exampleLabel}>예시:</Text>
+                  {exampleLines.map((line, index) => (
+                    <Text key={index} style={styles.exampleText}>
+                      {line}
+                    </Text>
+                  ))}
+                </View>
+              </View>
+            </View>
+          ) : (
+            // 결과 영역: Habit의 answerCard 레이아웃 + 이미지
+            <View style={styles.imageContainer}>
+              <View style={styles.answerCard}>
+                <View style={styles.answerHeader}>
+                  <View style={styles.iconCircle}>
+                    <Text style={styles.iconText}>✓</Text>
+                  </View>
+                  <Text style={styles.answerLabel}>AI가 만들어준 사진과 키워드</Text>
+                </View>
+
+                <View style={styles.imageWrapper}>
+                  <Image source={{ uri: imageUrl }} style={styles.generatedImage} />
+                </View>
+
+                <View style={styles.answerContent}>
+                  <Text style={styles.answerText}>{answer ? `'${answer}'` : ""}</Text>
+                </View>
+              </View>
+            </View>
+          )}
+        </View>
+
+        {/* 하단 버튼 */}
+        <View style={[BaseStyles.bottomContainer, styles.bottom]}>
+          <TouchableOpacity style={[styles.navButton, styles.prevButton]} onPress={handlerBack}>
+            <Text style={[BaseStyles.mainText, styles.navButtonText]}>
+              {isRecordingStep ? "이전" : "다시 입력"}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.navButton, styles.nextButton]}
+            onPress={isRecordingStep ? handlerInputSubmit : handlerNext}
+            activeOpacity={0.85}
+          >
+            <Text style={[BaseStyles.mainText, styles.navButtonText]}>
+              {isRecordingStep ? "완료" : "가사 만들기"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* 사진 생성 팝업 */}
+      {popup && (
+        <View style={[styles.popupBg, { backgroundColor: "#A5BEDF", flex: 1 }]}>
+          <Header />
+          <View style={[BaseStyles.topContainer, { height: "10%" }]}>
+            <Text style={[BaseStyles.mainText, styles.title]}>{"사진 생성 중"}</Text>
+          </View>
+          <View style={[BaseStyles.contentContainer, styles.centerContainer]}>
+            <View style={styles.indicatorContainer}>
+              <BallIndicator style={styles.ballIndicator} size={40} color="#FFFFFF" />
+              <Text style={[BaseStyles.mainText, styles.centerMessage]}>
+                {"조금만 기다리면 AI가 만들어준\n멋진 사진이 짜잔~하고\n나타날 거예요! 🚀"}
+              </Text>
+            </View>
+          </View>
+        </View>
+      )}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  // 상단 질문 영역
+  questionCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    paddingVertical: 20,
+    paddingHorizontal: 28,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 6,
+    minWidth: 340,
+  },
+  questionText: {
+    fontSize: 20,
+    fontFamily: "Jua-Regular",
+    color: "#333",
+    textAlign: "center",
+    letterSpacing: 1.3,
+    lineHeight: 30,
+  },
+  selectedHabitsContainer: {
+    marginTop: 15,
+    alignItems: "center",
+  },
+  selectedHabitsLabel: {
+    fontSize: 14,
+    fontFamily: "Jua-Regular",
+    color: "#2D3748",
+    marginBottom: 8,
+    letterSpacing: 1,
+  },
+  habitsTagWrapper: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 8,
+    maxWidth: 350,
+  },
+  habitChip: {
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: "#7B9FC4",
+  },
+  habitChipText: {
+    fontSize: 14,
+    fontFamily: "Jua-Regular",
+    color: "#4A7BA7",
+    letterSpacing: 1,
+  },
+
+  // 입력 영역
+  inputContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+  voiceSection: {
+    alignItems: "center",
+    marginBottom: 25,
+  },
+  micButton: {
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: "#FFFFFF",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 8,
+    marginBottom: 25,
+  },
+  micButtonRecording: {
+    backgroundColor: "#FFE5E5",
+    shadowColor: "#FF6B6B",
+    shadowOpacity: 0.3,
+  },
+  micIconOuter: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: "#F0F4F8",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  micIconOuterRecording: {
+    backgroundColor: "#FFD6D6",
+  },
+  micIconInner: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: "#A5BEDF",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  micIconInnerRecording: {
+    backgroundColor: "#FF6B6B",
+  },
+  micIcon: {
+    fontSize: 42,
+  },
+  recordingPulse: {
+    position: "absolute",
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: "rgba(255, 107, 107, 0.3)",
+  },
+  instructionText: {
+    fontSize: 19,
+    fontFamily: "Jua-Regular",
+    color: "#2D3748",
+    textAlign: "center",
+    lineHeight: 28,
+    letterSpacing: 1,
+  },
+
+  dividerContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "80%",
+    marginVertical: 18,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.5)",
+  },
+  dividerText: {
+    fontSize: 15,
+    fontFamily: "Jua-Regular",
+    color: "#2D3748",
+    marginHorizontal: 12,
+    letterSpacing: 1,
+  },
+
+  textInputSection: {
+    width: "100%",
+    alignItems: "center",
+  },
+  textInput: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    width: 280,
+    minHeight: 70,
+    maxHeight: 100,
+    paddingVertical: 18,
+    paddingHorizontal: 22,
+    fontSize: 17,
+    fontFamily: "Jua-Regular",
+    color: "#333",
+    textAlign: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 6,
+    letterSpacing: 1.5,
+  },
+  exampleContainer: {
+    marginTop: 15,
+    alignItems: "center",
+  },
+  exampleLabel: {
+    fontSize: 14,
+    fontFamily: "Jua-Regular",
+    color: "#2D3748",
+    marginBottom: 6,
+    letterSpacing: 1,
+  },
+  exampleText: {
+    fontSize: 15,
+    fontFamily: "Jua-Regular",
+    color: "#4A5568",
+    marginVertical: 2,
+    letterSpacing: 1,
+  },
+
+  // 결과 카드
+  imageContainer: {
+    justifyContent: "center",
+    alignItems: "center",
+    height: "100%",
+    width: "100%",
+  },
+  answerCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    width: 340,
+    paddingVertical: 25,
+    paddingHorizontal: 22,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  answerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 20,
+    gap: 12,
+  },
+  iconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#A5BEDF",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  iconText: {
+    fontSize: 20,
+    color: "#FFFFFF",
+    fontWeight: "bold",
+  },
+  answerLabel: {
+    fontSize: 18,
+    fontFamily: "Jua-Regular",
+    color: "#666",
+    letterSpacing: 1,
+  },
+  imageWrapper: {
+    backgroundColor: "#F8F9FA",
+    borderRadius: 16,
+    padding: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 20,
+  },
+  generatedImage: {
+    width: 240,
+    height: 240,
+    borderRadius: 12,
+  },
+  answerContent: {
+    backgroundColor: "#F8F9FA",
+    borderRadius: 16,
+    padding: 20,
+    minHeight: 80,
+    justifyContent: "center",
+  },
+  answerText: {
+    fontSize: 20,
+    fontFamily: "Jua-Regular",
+    color: "#333",
+    lineHeight: 32,
+    letterSpacing: 1.5,
+    textAlign: "center",
+  },
+
+  // 하단 버튼
+  bottom: {
+    height: "15%",
+    justifyContent: "space-between",
+    alignItems: "center",
+    flexDirection: "row",
+    paddingHorizontal: 30,
+    paddingVertical: 20,
+  },
+  navButton: {
+    width: 135,
+    height: 62,
+    borderRadius: 22,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  prevButton: {
+    backgroundColor: "#d6d6d6",
+  },
+  nextButton: {
+    backgroundColor: "#b7d9f7",
+  },
+  navButtonText: {
+    fontSize: 20,
+    fontFamily: "Jua-Regular",
+    color: "#333",
+  },
+
+  // 팝업
+  title: {
+    fontSize: 35,
+    lineHeight: 90,
+  },
+  popupBg: {
+    position: "absolute",
+    width: "100%",
+    height: "100%",
+    backgroundColor: "rgba(150,150,150,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  indicatorContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ballIndicator: {
+    position: "absolute",
+    top: -80,
+  },
+  centerMessage: {
+    fontSize: 24,
+    textAlign: "center",
+  },
+});
+
+const getCategoryExamples = (category: string) => {
+  const examples: Record<string, string[]> = {
+    likeFood: ["치킨이 최고예요", "마라탕을 자주 먹어요"],
+    likeAnimalOrCharacter: ["토끼 캐릭터가 좋아요", "강아지가 제일 귀여워요"],
+    likeColor: ["파란색이 좋아요", "연보라색이 취향이에요"],
+  };
+  return examples[category] || ["치킨이 좋아요", "토끼가 귀여워요", "파란색을 좋아해요"];
+};
+
+const getCategoryLabel = (category: string) => {
+  const categoryLabels: Record<string, string> = {
+    likeFood: "내가 좋아하는 음식 🍗",
+    likeAnimalOrCharacter: "내가 좋아하는 캐릭터나 동물 🐰🐳",
+    likeColor: "내가 좋아하는 색깔 🍀",
+  };
+  return categoryLabels[category] || "내가 좋아하는 카테고리";
+};
+
+const getCategoryText = (category: string) => {
+  const categoryLabels: Record<string, string> = {
+    likeFood: "음식",
+    likeAnimalOrCharacter: "캐릭터나 동물",
+    likeColor: "색깔",
+  };
+  return categoryLabels[category] || "카테고리";
+};
+
+export default LyricQuestionScreen;

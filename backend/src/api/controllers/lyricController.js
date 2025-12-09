@@ -1,65 +1,84 @@
 const mongoose = require('mongoose'); 
 const { callGPTApi, createGPTPrompt } = require('../gptAPI/gptFunctions');
-const song = require('../../models/song');
-const userInfo = require('../../models/userInfo'); 
+const SongBase = require('../../models/songBase');
+const UserInfo = require('../../models/userInfo');
+const { saveLog } = require('./logSaver'); 
+
+// GPT 응답(객체/문자열)을 제목/가사 문자열로 정규화
+const normalizeLyricResponse = (gptResponse) => {
+    if (gptResponse && typeof gptResponse === "object") {
+        const title = gptResponse.title || "무제 동요";
+        const verseLines = Array.isArray(gptResponse.verse) ? gptResponse.verse.filter(Boolean) : [];
+        const chorusLines = Array.isArray(gptResponse.chorus) ? gptResponse.chorus.filter(Boolean) : [];
+        const fallbackLyric = typeof gptResponse.lyric === "string" ? gptResponse.lyric : "";
+
+        const verse = verseLines.length ? ["[Verse]", ...verseLines] : [];
+        const chorus = chorusLines.length ? ["[Chorus]", ...chorusLines] : [];
+        const lyricBody = [...verse, ...chorus].join("\n").trim();
+
+        return {
+            title,
+            lyric: lyricBody || fallbackLyric || "가사를 생성하지 못했습니다.",
+        };
+    }
+
+    if (typeof gptResponse === "string" || gptResponse instanceof String) {
+        const str = String(gptResponse);
+        try {
+            const parsed = JSON.parse(str);
+            return normalizeLyricResponse(parsed);
+        } catch (_jsonErr) {
+            const titleMatch = str.match(/"title"\s*:\s*"([^"]+)"/s);
+            const lyricMatch = str.match(/"lyric"\s*:\s*"(.*?)"/s); 
+
+            if (titleMatch && lyricMatch) {
+                const rawLyric = lyricMatch[1].trim().replace(/\\n/g, '\n').replace(/\./g, '\n');
+                return { title: titleMatch[1].trim(), lyric: rawLyric };
+            }
+        }
+    }
+
+    throw new Error("Invalid GPT lyric response format");
+};
 
 
 exports.generateLyric = async (req, res) => {
-    let { userId } = req.body;
+    const { userId } = req.user || {};
 
-    if (typeof userId === 'number') {
-        userId = userId.toString();
-    }
-    
     try {
-        let preferences = await userInfo.findOne({ userId: userId });
+        if (!userId) {
+            return res.status(401).json({ message: "로그인이 필요합니다." });
+        }
+        let preferences = await UserInfo.findOne({ userId: userId });
+        console.log(preferences);
         if (!preferences) {
             return res.status(404).json({ message: "User not found" });
-        }
-        const prompt = createGPTPrompt(preferences);
-    
-        const gptResponse = await callGPTApi(prompt);
-        console.log("gptResponse : " + gptResponse);
-
-        let title, lyrics;
-
-        // JSON 형식인지 확인
-        try {
-            const parsedResponse = JSON.parse(gptResponse);
-            title = parsedResponse.title;
-            lyrics = parsedResponse.lyric;
-        } catch (e) {
-            console.error('Response is not JSON, parsing manually');
-            // JSON 형식이 아닌 경우 정규 표현식을 사용해 title과 lyric 추출
-            const titleMatch = gptResponse.match(/"title"\s*:\s*"([^"]+)"/s);
-            const lyricMatch = gptResponse.match(/"lyric"\s*:\s*"(.*?)"\s*\n}/s);
-
-            if (!titleMatch || !lyricMatch) {
-                console.error('Invalid response format', { titleMatch, lyricMatch });
-                throw new Error('Invalid response format');
-            }
-
-            title = titleMatch[1].trim();
-            lyrics = lyricMatch[1].trim().replace(/\\n/g, '\n').replace(/\./g, '\n');
-        }
+        };
+        const gptResponse = await callGPTApi(preferences);
+        const { title, lyric } = normalizeLyricResponse(gptResponse);
 
 
-        console.log("title : " + title);
-        console.log("lyrics : " + lyrics);
+        // console.log("title : " + title);
+        // console.log("lyric : " + lyric);
 
-        // 사용자의 song 문서 찾기 또는 새로 생성
-        let userSong = await song.findOne({ userId: userId });
-        if (!userSong) {
-            userSong = new song({ userId, title, lyrics }); // 새 song 생성
+        // 사용자의 SongBase 문서 찾기 또는 새로 생성
+        let songBase = await SongBase.findOne({ userId });
+        if (!songBase) {
+            // 새 SongBase 생성
+            songBase = new SongBase({ userId, title, lyric });
         } else {
-            userSong.title = title;
-            userSong.lyrics = lyrics;  // 기존 song 업데이트
+            // 기존 SongBase 업데이트
+            songBase.title = title;
+            songBase.lyric = lyric;
         }
 
         // DB에 저장
-        await userSong.save();
+        await songBase.save();
 
-        res.json({ title: userSong.title, lyrics: userSong.lyrics });
+        // 로그 저장 (한국어 설명과 details 포함)
+        await saveLog(userId, `'${title}' 제목의 가사를 생성했습니다.`, { title, lyric });
+
+        res.json({ title: songBase.title, lyric: songBase.lyric });
 
     } catch (error) {
         console.error('Error generating lyrics:', error);
@@ -70,14 +89,20 @@ exports.generateLyric = async (req, res) => {
 
 exports.getLyric = async (req, res) => {
     try {
-        const { userId } = req.params;
-        const userSong = await song.findOne({ userId: userId });
+        const { userId } = req.user || {};
+        if (!userId) {
+            return res.status(401).json({ message: "로그인이 필요합니다." });
+        }
+
+        // 사용자의 SongBase 문서 찾기
+        const userSong = await SongBase.findOne({ userId });
         if (!userSong) {
             return res.status(404).json({ message: "User not found" });
         }
+
         res.status(200).json(userSong);
-        } catch (error) {
-        res.status(500).json({ message: "Error getting preferences", error });
+    } catch (error) {
+        console.error('Error getting lyrics:', error);
+        res.status(500).json({ message: "Error getting lyrics", error });
     }
 };
-
