@@ -1,5 +1,5 @@
-import React,{useContext, useState} from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet ,Alert} from 'react-native';
+import React, { useContext, useState } from 'react';
+import { View, Text, Image, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { SelectedCategoriesContext } from "../contexts/SelectedCategoriesContext"; // 컨텍스트 임포트
 import api from '../utils/api';
@@ -9,7 +9,7 @@ const Header: React.FC = () => {
   const navigation = useNavigation(); // navigation 객체 사용
   const [showProfile, setShowProfile] = useState(false);
 
-  const goToHome = async() => {
+  const goToHome = async () => {
     if (!isAuthenticated) {
       navigation.navigate('LoginScreen');
       return;
@@ -20,7 +20,6 @@ const Header: React.FC = () => {
       routes: [{ name: 'HomeScreen' }],
     }); // 처음 화면으로 완전 초기화 이동
     clearCategory();
-
   };
 
   const goToHabit = () => {
@@ -62,9 +61,9 @@ const Header: React.FC = () => {
       <View style={styles.headerContainer}>
         {/* 좌측 홈 버튼 */}
         <TouchableOpacity onPress={goToHome} style={styles.homeIconContainer}>
-          <Image 
-            source={require('../assets/imgs/home.png')} 
-            style={styles.homeIcon} 
+          <Image
+            source={require('../assets/imgs/home.png')}
+            style={styles.homeIcon}
           />
         </TouchableOpacity>
 
@@ -73,7 +72,7 @@ const Header: React.FC = () => {
 
         {/* 우측 프로필 버튼 */}
         <TouchableOpacity onPress={toggleProfile} style={styles.profileButton}>
-          <Text style={styles.profileText}>{(childName || "👤").slice(0,1)}</Text>
+          <Text style={styles.profileText}>{(childName || "👤").slice(0, 1)}</Text>
         </TouchableOpacity>
       </View>
 
@@ -118,17 +117,18 @@ const Header: React.FC = () => {
 
 const styles = StyleSheet.create({
   headerContainer: {
-    flexDirection: 'row', 
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center', 
+    justifyContent: 'space-between', // 좌·우 끝 + 가운데 타이틀
     width: '100%',
     height: 50,
-    backgroundColor: '#A5BEDF', // 배경색 설정 (필요 시 수정)
+    backgroundColor: '#A5BEDF',
+    paddingHorizontal: 20,
   },
   homeIconContainer: {
-    position: 'absolute', 
-    left: 35, 
-    top: 18, 
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
   },
   homeIcon: {
     width: 30,
@@ -141,12 +141,9 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0, 0, 0, 0.5)",
     textShadowOffset: { width: 2, height: 2 },
     textShadowRadius: 3,
-    textAlign: 'center', 
+    textAlign: 'center',
   },
   profileButton: {
-    position:'absolute',
-    right: 12,
-    top: 8,
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -165,7 +162,7 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between', 
+    justifyContent: 'space-between',
     paddingHorizontal: 10,
     paddingVertical: 3,
     backgroundColor: '#A5BEDF',
