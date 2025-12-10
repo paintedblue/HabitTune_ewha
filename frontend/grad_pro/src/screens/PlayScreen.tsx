@@ -25,13 +25,21 @@ const LyricMakeScreen = ({ route, navigation }) => {
   const { userId: routeUserId, requestData, type } = route.params || {};
   const userId = routeUserId || ctxUserId;
 
-  // 음원 URL 우선순위: 서버 audio_url → 생성 중(Gen) fallback → dev dummy
-  const initialAudioUrl =
-    requestData?.audio_url ||
-    (requestData?.id && type === "Gen"
-      ? `https://cdn.aimlapi.com/suno/audio/?item_id=${requestData.id}`
-      : undefined) ||
-    exSongData.id;
+  // 음원 URL 우선순위: 서버 audio_url/audioUrl/url → 생성 중(Gen) fallback
+  const resolveAudioUrl = () => {
+    const directUrl =
+      requestData?.audio_url || requestData?.audioUrl || requestData?.url;
+
+    if (directUrl) return directUrl;
+
+    if (requestData?.id && type === "Gen") {
+      return `https://cdn.aimlapi.com/suno/audio/?item_id=${requestData.id}`;
+    }
+
+    return undefined;
+  };
+
+  const initialAudioUrl = resolveAudioUrl();
 
   const [audioUrl, setAudioUrl] = useState(initialAudioUrl);
   const [title, setTitle] = useState(requestData ? requestData.title : exSongData.title);
@@ -50,13 +58,7 @@ const LyricMakeScreen = ({ route, navigation }) => {
   useEffect(() => {
     if (!requestData) return;
 
-    const urlFromServer = requestData.audio_url;
-    const fallbackUrl =
-      type === "Gen" && requestData.id
-        ? `https://cdn.aimlapi.com/suno/audio/?item_id=${requestData.id}`
-        : null;
-
-    const resolvedUrl = urlFromServer || fallbackUrl;
+    const resolvedUrl = resolveAudioUrl();
 
     setMusic(resolvedUrl);
     setTitle(requestData.title);
@@ -68,10 +70,13 @@ const LyricMakeScreen = ({ route, navigation }) => {
     if (!url) {
       console.log("재생할 오디오 URL이 없습니다. 서버 audio_url 확인 필요.");
       setAudioUrl(undefined);
+      setIsPlaying(false);
       return;
     }
     setAudioUrl(url);
+    setIsPlaying(false);
     try {
+      SoundPlayer.stop();
       SoundPlayer.loadUrl(url);
       console.log("음원 로드 요청 성공", { url });
     } catch (err) {
@@ -83,7 +88,7 @@ const LyricMakeScreen = ({ route, navigation }) => {
     const backAction = () => {
       SoundPlayer.stop();
       return false;
-  };
+    };
     const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
 
     return () => backHandler.remove();
@@ -126,11 +131,13 @@ const LyricMakeScreen = ({ route, navigation }) => {
     } else {
       try {
         console.log("재생 시작 요청", { audioUrl });
+        SoundPlayer.stop();
         SoundPlayer.playUrl(audioUrl);  // URL을 사용하여 음악 재생
         setIsPlaying(true);
         logPlayback();
       } catch (e) {
         console.log('Error playing the sound file', e);
+        setIsPlaying(false);
       }
     }
   };
