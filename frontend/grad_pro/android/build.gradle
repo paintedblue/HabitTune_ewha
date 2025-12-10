@@ -12,29 +12,10 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:7.4.2") // gradle 버전 추가
+        classpath("com.android.tools.build:gradle:8.2.1") // gradle 버전 추가
         classpath("com.facebook.react:react-native-gradle-plugin")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion") // Kotlin 플러그인에 버전 추가
     }
 }
 
 apply plugin: "com.facebook.react.rootproject"
-
-// Add this block to apply Kotlin plugin
-allprojects {
-    repositories {
-        mavenLocal()
-        mavenCentral()
-        google()
-    }
-}
-
-// Add this block to apply the Kotlin plugin
-subprojects {
-    afterEvaluate { project ->
-        if (project.hasProperty("android")) {
-            project.apply plugin: "kotlin-android"
-            project.apply plugin: "kotlin-android-extensions"
-        }
-    }
-}

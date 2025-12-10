@@ -33,7 +33,7 @@ const parseGptResponse = (response) => {
 const testGPTPrompt = async () => {
   try {
     // 프롬프트 생성
-    const userInfo = await UserInfo.findOne({ userId: 'user123' });
+    const userInfo = await UserInfo.findOne({ userId: 'testUser123' });
     if (!userInfo) {
       console.log("No user found with the given userId.");
       return;
@@ -52,9 +52,8 @@ const testGPTPrompt = async () => {
     const responseJson = parseGptResponse(gptResponse);
 
     // 각 부분을 출력
-    // console.log("GPT Response - 제목:", responseJson.제목);
-    // console.log("GPT Response - 후렴구:", responseJson.후렴구);
-    // console.log("GPT Response - 가사:", responseJson.가사);
+    console.log("GPT Response - 제목:", responseJson.title);
+    console.log("GPT Response - 가사:", responseJson.lyric);
   } catch (error) {
     console.error('Error during test:', error.message);
   }
@@ -62,30 +61,37 @@ const testGPTPrompt = async () => {
 
 const testKeyword = async () => {
   try {
-    sentance = "나는 음 참새 아니 코끼리 좋아";
+    const sentence = "나는 고양이";
 
-    const prompt = createExtractPrompt(sentance);
-    //console.log("Generated Prompt:\n", prompt);
+    // 프롬프트 생성
+    const prompt = createExtractPrompt(sentence, "likeAnimal");  // 필드명 추가
+    console.log("Generated Prompt:\n", prompt);
 
     // GPT API 호출
     const gptResponse = await extractKeyword(prompt);
 
     // 응답 출력
-    console.log("GPT Response:\n", gptResponse);
+    // console.log("GPT Response:\n", gptResponse);
 
-    // 응답을 JSON 형식으로 파싱
-    //const responseJson = parseGptResponse(gptResponse);
+    // GPT의 응답이 정확한 JSON 형식이 아닌 JavaScript 객체 형식으로 오는 것 같음.
+    // 응답이 JavaScript 객체 형식 ({ keyword: '코끼리', color: '#808080', ... })으로 오기 때문에, JSON.parse()로 바로 파싱할 수 없다.
 
-    // 각 부분을 출력
-    // console.log("GPT Response - 제목:", responseJson.제목);
-    // console.log("GPT Response - 후렴구:", responseJson.후렴구);
-    // console.log("GPT Response - 가사:", responseJson.가사);
+    const responseString = JSON.stringify(gptResponse);  // 객체를 문자열로 변환
+    const fixedResponse = responseString
+      .replace(/(\w+):/g, '"$1":')  // 필드 이름에 따옴표 추가
+      .replace(/'/g, '"');  // 작은따옴표를 큰따옴표로 변경
+
+    // 정규화된 응답을 JSON으로 파싱
+    const parsedResponse = JSON.parse(fixedResponse);
+
+    console.log("Parsed GPT Response:\n", parsedResponse);
+
   } catch (error) {
-    console.error('Error during test:', error.message);
+    console.error('Error during testKeyword:', error.message);
   }
 };
 
 // 테스트 실행
-//testGPTPrompt();
+testGPTPrompt();
 
-testKeyword();
+// testKeyword();

@@ -1,48 +1,66 @@
+// backend/src/server.js
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const mongoose = require('mongoose');
 const path = require('path');
 const cors = require('cors');
-require('dotenv').config({ path: '../.env' }); // 환경 변수 사용을 위해 dotenv 모듈 사용
-console.log('OpenAI API Key:', process.env.OPENAI_API_KEY);
 
-// Routes import
+// ====== Load Environment Variables (.env) ======
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+
+// ====== Debug Log (필요 없으면 지워도 됨) ======
+console.log("Loaded MONGODB_URI:", process.env.MONGODB_URI);
+console.log("Loaded PORT:", process.env.PORT);
+
+// ====== Import Routes ======
+const authRoutes = require('./api/routes/authRoutes');
 const preferencesRoutes = require('./api/routes/preferencesRoutes');
 const habitRoutes = require('./api/routes/habitRoutes');
 const lyricRoutes = require('./api/routes/lyricRoutes');
+const instruRoutes = require('./api/routes/instruRoutes');
+const songRoutes = require('./api/routes/songRoutes');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
+const MONGODB_URI = process.env.MONGODB_URI;
 
-mongoose.connect('mongodb://localhost:27017/grad_pro').then(() => {
-    console.log('MongoDB connected');
-}).catch(err => {
-    console.error('MongoDB connection error:', err);
-});
+// ====== MongoDB Connect (Atlas or Local) ======
+mongoose
+  .connect(MONGODB_URI)
+  .then(() => {
+    console.log('✅ MongoDB connected');
+    // 서버는 DB 연결 후에 시작
+    app.listen(PORT, () => {
+      console.log(`🚀 Server is running on port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('❌ MongoDB connection error:', err);
+  });
 
-// Middleware
-app.use(cors());  // Enable CORS
-app.use(bodyParser.json());  // Body parser for JSON formatted requests
-app.use(express.static(path.join(__dirname, 'public')));  // Serve static files
+// ====== Middleware ======
+app.use(cors());
+app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-// API routes usage
+// ====== Basic Test Route ======
 app.get('/', (req, res) => {
-  res.send('JEVAL');
+  res.send('JEVAL Backend + MongoDB Connected!');
 });
 
-app.use('/api/preferences', preferencesRoutes);  // preferencesRoutes 사용
+// ====== API Routes ======
+app.use('/api/auth', authRoutes);
+app.use('/api/preferences', preferencesRoutes);
 app.use('/api/habit', habitRoutes);
-app.use('/api/lyric', lyricRoutes); 
+app.use('/api/lyric', lyricRoutes);
+app.use('/api/instrument', instruRoutes);
+app.use('/api/song', songRoutes);
 
-// Error handling middleware
+// ====== Error Handling Middleware ======
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500). send('Something broke!');
-});
-
-// Starting the server
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  res.status(500).send('Something broke!');
 });
 
 module.exports = app;

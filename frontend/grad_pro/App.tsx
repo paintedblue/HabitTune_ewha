@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import StackNavigation from './src/navigation/StackNavigation';
+import { SelectedCategoriesProvider } from './src/contexts/SelectedCategoriesContext';
 
 /**
  * Main App
@@ -8,7 +9,9 @@ import StackNavigation from './src/navigation/StackNavigation';
  */
 const App = (props: any) => {
   return (
+    <SelectedCategoriesProvider>
     <StackNavigation />
+    </SelectedCategoriesProvider>
   )
 }
 export default App;
